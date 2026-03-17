@@ -236,8 +236,11 @@ async def process_forward(bot, event, user):
         
         with open(path_txt, 'w', encoding='utf-8') as f:
             f.write('\n'.join(final_txt_content))
+        
+        # ✅ FIXED LINE - No backslash in f-string expression
+        mapping_text = '\n'.join(mapping_log) if mapping_log else "No mappings found."
         with open(path_map, 'w', encoding='utf-8') as f:
-            f.write(f"# Forward Mapping Report\n# Total Sent: {forwarded_count}\n\n{'\n'.join(mapping_log)}")
+            f.write(f"# Forward Mapping Report\n# Total Sent: {forwarded_count}\n\n{mapping_text}")
 
         await bot.send_file(target_full_id, path_txt, caption=f"📄 **Updated List** (`{base_name}_updated.txt`)", file_name=f"{base_name}_updated.txt", force_document=True)
         await asyncio.sleep(2)
