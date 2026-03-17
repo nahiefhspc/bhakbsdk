@@ -2,6 +2,8 @@ import os
 import re
 import asyncio
 import time
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from dotenv import load_dotenv
 from telethon import TelegramClient, events
 from telethon.errors import FloodWaitError
@@ -14,6 +16,7 @@ load_dotenv()
 API_ID = int(os.getenv("API_ID", "23713783"))
 API_HASH = os.getenv("API_HASH", "2daa157943cb2d76d149c4de0b036a99")
 BOT_TOKEN = os.getenv("BOT_TOKEN", "7213717609:AAGEyAJSfMUderWqlIAJkziRcIBrVTwjbXM")
+PORT = int(os.getenv("PORT", 8080))  # 👈 Required for health check
 # ========================================
 
 user_data = {}
@@ -30,6 +33,29 @@ def get_user(user_id):
         }
     return user_data[user_id]
 
+
+# ====================== HEALTH CHECK SERVER ======================
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == '/health':
+            self.send_response(200)
+            self.send_header('Content-type', 'text/plain')
+            self.end_headers()
+            self.wfile.write(b'OK')
+        else:
+            self.send_response(404)
+            self.end_headers()
+    
+    def log_message(self, format, *args):
+        pass  # Suppress logs
+
+def start_http_server():
+    """Run HTTP server for health checks in separate thread"""
+    server = HTTPServer(('0.0.0.0', PORT), HealthHandler)
+    print(f"🌐 Health check server running on port {PORT}")
+    server.serve_forever()
+
+# ====================== TELEGRAM BOT ======================
 
 def parse_link(link):
     match = re.search(r't\.me/c/(\d+)/(\d+)', link)
@@ -180,7 +206,6 @@ async def process_forward(bot, event, user):
             src_cap = source_msg.raw_text or source_msg.text or ""
             new_cap = remove_chapter_id_from_caption(src_cap)
             
-            # ✅ BOLD CAPTION LOGIC (PROPER ENTITY)
             bold_entities = [MessageEntityBold(0, len(new_cap))] if new_cap else []
             
             retry_fwd = 0
@@ -237,7 +262,6 @@ async def process_forward(bot, event, user):
         with open(path_txt, 'w', encoding='utf-8') as f:
             f.write('\n'.join(final_txt_content))
         
-        # ✅ FIXED LINE - No backslash in f-string expression
         mapping_text = '\n'.join(mapping_log) if mapping_log else "No mappings found."
         with open(path_map, 'w', encoding='utf-8') as f:
             f.write(f"# Forward Mapping Report\n# Total Sent: {forwarded_count}\n\n{mapping_text}")
@@ -272,10 +296,14 @@ async def process_filter(bot, event, user):
 
 
 async def main():
+    # Start HTTP Health Check Server in background thread
+    http_thread = threading.Thread(target=start_http_server, daemon=True)
+    http_thread.start()
+    
     bot = TelegramClient('filter_bot', API_ID, API_HASH)
     await bot.start(bot_token=BOT_TOKEN)
     os.makedirs('./downloads', exist_ok=True)
-    print("🚀 Bot Online!")
+    print("🚀 Bot Online! | 🌐 Health Check: http://localhost:{PORT}/health")
 
     @bot.on(events.NewMessage(pattern='/start'))
     async def start_h(event): await event.respond("🤖 **Bot Active**\nCommands:\n/filter\n/forward\n/cancel")
