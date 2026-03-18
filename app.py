@@ -29,7 +29,8 @@ def get_user(user_id):
             'channel_id': None, 'first_msg_id': None, 'last_msg_id': None,
             'fwd_step': None, 'fwd_target_channel': None, 'fwd_target_id_no_prefix': None,
             'fwd_txt_lines': [], 'fwd_txt_filename': '', 'fwd_file_path': None,
-            'fwd_source_channel': None, 'fwd_first_msg_id': None, 'fwd_last_msg_id': None,
+            'fwd_source_channel': None, 'fwd_source_disp_id': None,
+            'fwd_first_msg_id': None, 'fwd_last_msg_id': None,
         }
     return user_data[user_id]
 
@@ -64,7 +65,6 @@ def start_http_server():
 
 # ====================== HELPER FUNCTIONS ======================
 def parse_link(link):
-    """Extract channel_id and msg_id from t.me link"""
     match = re.search(r't\.me/c/(\d+)/(\d+)', link)
     if match:
         return int(match.group(1)), int(match.group(2))
@@ -72,25 +72,18 @@ def parse_link(link):
 
 
 def parse_target_channel(text):
-    """
-    Parse channel ID and return as INTEGER (not string!)
-    Returns: (full_id as int, display_id as string)
-    """
     text = str(text).strip()
-    
     if text.startswith('-100'):
-        # Already has -100 prefix
         numeric = text[4:]
         if numeric.isdigit():
-            return int(text), numeric  # ✅ Return as INTEGER
+            return int(text), numeric
     elif text.startswith('-'):
         numeric = text[1:]
         if numeric.isdigit():
-            return int(f"-100{numeric}"), numeric  # ✅ Return as INTEGER
+            return int(f"-100{numeric}"), numeric
     else:
         if text.isdigit():
-            return int(f"-100{text}"), text  # ✅ Return as INTEGER
-    
+            return int(f"-100{text}"), text
     return None, None
 
 
@@ -192,11 +185,10 @@ def get_output_filename(original_filename):
 
 # ====================== FORWARD PROCESS ======================
 async def process_forward(bot, event, user):
-    # ✅ All channel IDs are now INTEGERS
-    source_full_id = user['fwd_source_channel']      # INTEGER like -1001234567890
-    source_disp_id = user['fwd_source_disp_id']      # STRING for links like "1234567890"
-    target_full_id = user['fwd_target_channel']      # INTEGER like -1001234567890
-    target_disp_id = user['fwd_target_id_no_prefix'] # STRING for links like "1234567890"
+    source_full_id = user['fwd_source_channel']
+    source_disp_id = user['fwd_source_disp_id']
+    target_full_id = user['fwd_target_channel']
+    target_disp_id = user['fwd_target_id_no_prefix']
 
     first_msg_id = user['fwd_first_msg_id']
     last_msg_id = user['fwd_last_msg_id']
@@ -229,7 +221,6 @@ async def process_forward(bot, event, user):
 
             while retry < 3:
                 try:
-                    # ✅ Using INTEGER channel ID
                     messages = await bot.get_messages(source_full_id, ids=chunk)
 
                     for msg in messages:
@@ -273,6 +264,7 @@ async def process_forward(bot, event, user):
 
         txt_entries = extract_keys_from_txt(txt_lines)
         line_mappings = {}
+        missed_lines = set()  # ✅ Track missed line numbers (1-based)
 
         try:
             await status_msg.edit(f"🚀 Starting Forward...")
@@ -295,6 +287,7 @@ async def process_forward(bot, event, user):
 
             if not source_msg:
                 not_found_count += 1
+                missed_lines.add(line_idx + 1)  # Convert to 1-based line number
                 if line_idx not in line_mappings:
                     line_mappings[line_idx] = []
                 line_mappings[line_idx].append({'qual': quality, 'key': key, 'url': None})
@@ -303,27 +296,28 @@ async def process_forward(bot, event, user):
             src_cap = source_msg.raw_text or source_msg.text or ""
             new_cap = remove_chapter_id_from_caption(src_cap)
 
-            # ✅ BOLD CAPTION
-            bold_entities = [MessageEntityBold(0, len(new_cap))] if new_cap else []
+            # ✅ BOLD ALL CAPTIONS (using MessageEntityBold)
+            bold_entities = []
+            if new_cap:
+                bold_entities = [MessageEntityBold(0, len(new_cap))]
 
             retry_fwd = 0
             fwd_msg = None
             while retry_fwd < 5:
                 try:
                     if source_msg.media:
-                        # ✅ Using INTEGER channel ID
                         fwd_msg = await bot.send_file(
                             target_full_id,
                             source_msg.media,
                             caption=new_cap,
-                            entities=bold_entities,
+                            entities=bold_entities,  # ✅ BOLD CAPTION HERE
                             force_document=True
                         )
                     else:
                         fwd_msg = await bot.send_message(
                             target_full_id,
                             new_cap,
-                            entities=bold_entities
+                            entities=bold_entities  # ✅ BOLD TEXT HERE
                         )
                     break
                 except FloodWaitError as fw:
@@ -346,6 +340,7 @@ async def process_forward(bot, event, user):
                 line_mappings[line_idx].append({'qual': quality, 'key': key, 'url': target_link})
             else:
                 not_found_count += 1
+                missed_lines.add(line_idx + 1)
                 if line_idx not in line_mappings:
                     line_mappings[line_idx] = []
                 line_mappings[line_idx].append({'qual': quality, 'key': key, 'url': None})
@@ -387,10 +382,9 @@ async def process_forward(bot, event, user):
         with open(path_map, 'w', encoding='utf-8') as f:
             f.write(f"# Forward Mapping Report\n# Total Sent: {forwarded_count}\n\n{mapping_text}")
 
-        # ✅ Using INTEGER channel ID
         await bot.send_file(
             target_full_id, path_txt,
-            caption=f"📄 **Updated List** (`{base_name}_updated.txt`)",
+            caption=f"📄 **Updated List** (`{base_name}_updated.txt`)\n✅ Forwarded: **{forwarded_count}**\n❌ Missing: **{not_found_count}**",
             file_name=f"{base_name}_updated.txt",
             force_document=True
         )
@@ -406,12 +400,18 @@ async def process_forward(bot, event, user):
         cleanup_file(path_map)
         cleanup_file(user['fwd_file_path'])
 
+        # ✅ Send Missed Lines Report to Bot Chat
+        missed_msg = ""
+        if missed_lines:
+            sorted_missed = sorted(list(missed_lines))
+            missed_msg = f"⚠️ **Missed Line Numbers:** `{', '.join(map(str, sorted_missed))}`"
+            await event.respond(missed_msg)
+
         try:
-            await status_msg.edit(
-                f"🎉 **Task Completed!**\n"
-                f"✅ Forwarded: **{forwarded_count}**\n"
-                f"❌ Not Found: **{not_found_count}**"
-            )
+            final_msg = f"🎉 **Task Completed!**\n✅ Forwarded: **{forwarded_count}**\n❌ Not Found: **{not_found_count}**"
+            if missed_msg:
+                final_msg += f"\n{missed_msg}"
+            await status_msg.edit(final_msg)
         except:
             pass
 
@@ -438,7 +438,6 @@ async def process_filter(bot, event, user):
     if first_msg_id > last_msg_id:
         first_msg_id, last_msg_id = last_msg_id, first_msg_id
 
-    # ✅ INTEGER channel ID
     full_channel_id = int(f"-100{channel_id}")
     total_messages = last_msg_id - first_msg_id + 1
 
@@ -664,7 +663,6 @@ async def process_filter(bot, event, user):
 
 # ====================== MAIN BOT ======================
 async def main():
-    # Start HTTP Health Check Server
     http_thread = threading.Thread(target=start_http_server, daemon=True)
     http_thread.start()
 
@@ -791,8 +789,8 @@ async def main():
         if u['fwd_step'] == 'wait_target':
             full_id, disp_id = parse_target_channel(event.text or '')
             if full_id:
-                u['fwd_target_channel'] = full_id        # ✅ INTEGER
-                u['fwd_target_id_no_prefix'] = disp_id   # STRING for links
+                u['fwd_target_channel'] = full_id
+                u['fwd_target_id_no_prefix'] = disp_id
                 u['fwd_step'] = 'wait_fwd_txt'
                 await event.respond(
                     f"✅ **Target Set: `{disp_id}`**\n\n"
@@ -831,8 +829,8 @@ async def main():
         if u['fwd_step'] == 'wait_src_flink':
             cid, mid = parse_link(event.text or '')
             if cid:
-                u['fwd_source_channel'] = int(f"-100{cid}")  # ✅ INTEGER
-                u['fwd_source_disp_id'] = str(cid)           # ✅ STRING for links
+                u['fwd_source_channel'] = int(f"-100{cid}")
+                u['fwd_source_disp_id'] = str(cid)
                 u['fwd_first_msg_id'] = mid
                 u['fwd_step'] = 'wait_src_llink'
                 await event.respond(
@@ -847,7 +845,7 @@ async def main():
             cid, mid = parse_link(event.text or '')
             if cid:
                 expected_source = int(f"-100{cid}")
-                if expected_source == u['fwd_source_channel']:  # ✅ Compare INTEGERs
+                if expected_source == u['fwd_source_channel']:
                     u['fwd_last_msg_id'] = mid
                     u['fwd_step'] = 'run'
                     await event.respond(
