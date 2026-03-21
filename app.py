@@ -9,15 +9,12 @@ from telethon import TelegramClient, events
 from telethon.errors import FloodWaitError
 from telethon.tl.types import MessageEntityBold, DocumentAttributeFilename
 
-# Load environment variables
 load_dotenv()
 
-# ============ CONFIGURATION ============
 API_ID = int(os.getenv("API_ID", "23713783"))
 API_HASH = os.getenv("API_HASH", "2daa157943cb2d76d149c4de0b036a99")
 BOT_TOKEN = os.getenv("BOT_TOKEN", "7213717609:AAGEyAJSfMUderWqlIAJkziRcIBrVTwjbXM")
 PORT = int(os.getenv("PORT", 8080))
-# ========================================
 
 user_data = {}
 
@@ -36,7 +33,6 @@ def get_user(user_id):
 
 
 def get_file_name(document):
-    """Safely extract file_name from Document attributes"""
     if not document:
         return ""
     if hasattr(document, 'attributes'):
@@ -46,7 +42,6 @@ def get_file_name(document):
     return ""
 
 
-# ====================== HEALTH CHECK SERVER ======================
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -57,13 +52,13 @@ class HealthHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
 
+
 def start_http_server():
     server = HTTPServer(('0.0.0.0', PORT), HealthHandler)
     print(f"🌐 Health check running on port {PORT}")
     server.serve_forever()
 
 
-# ====================== HELPER FUNCTIONS ======================
 def parse_link(link):
     match = re.search(r't\.me/c/(\d+)/(\d+)', link)
     if match:
@@ -126,40 +121,31 @@ def extract_keys_from_txt(txt_lines):
     return results
 
 
-def is_failed_message(text):
-    if not text:
-        return False
-    return 'Downloading Failed' in text or 'DRM MPD Downloading Failed' in text
+def extract_keys_from_txt_format(txt_lines):
+    """
+    Extract keys from format: 🌚{number}🌚{name}💀{key}💀 : url
+    Returns list of dicts with line info
+    """
+    results = []
+    pattern = re.compile(r'🌚\{([^}]*)\}🌚\{([^}]*)\}💀\{([^}]*)\}💀')
 
-
-def is_uploading_message(text):
-    if not text:
-        return False
-    return 'Uploading Video:' in text
-
-
-def extract_failed_number(text):
-    match = re.search(r'Name\s*=\s*>+\s*(\d+)', text)
-    if match:
-        return int(match.group(1))
-    return None
-
-
-def extract_failed_video_name(text):
-    match = re.search(r'Name\s*=\s*>+\s*\d+\s+(.+?)(?:\n|$)', text)
-    if match:
-        return match.group(1).strip()
-    return None
-
-
-def extract_uploading_video_name(text):
-    lines = text.split('\n')
-    for i, line in enumerate(lines):
-        if 'Uploading Video:' in line:
-            remaining = '\n'.join(lines[i + 1:]).strip()
-            if remaining:
-                return remaining.split('\n')[0].strip()
-    return None
+    for idx, line in enumerate(txt_lines):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        match = pattern.search(stripped)
+        if match:
+            number_part = match.group(1).strip()
+            name = match.group(2).strip()
+            key = match.group(3).strip()
+            results.append({
+                'line_idx': idx,
+                'line_number': number_part,
+                'name': name,
+                'key': key,
+                'original_line': line.rstrip('\n').rstrip('\r')
+            })
+    return results
 
 
 def cleanup_file(file_path):
@@ -264,7 +250,7 @@ async def process_forward(bot, event, user):
 
         txt_entries = extract_keys_from_txt(txt_lines)
         line_mappings = {}
-        missed_lines = set()  # ✅ Track missed line numbers (1-based)
+        missed_lines = set()
 
         try:
             await status_msg.edit(f"🚀 Starting Forward...")
@@ -287,7 +273,7 @@ async def process_forward(bot, event, user):
 
             if not source_msg:
                 not_found_count += 1
-                missed_lines.add(line_idx + 1)  # Convert to 1-based line number
+                missed_lines.add(line_idx + 1)
                 if line_idx not in line_mappings:
                     line_mappings[line_idx] = []
                 line_mappings[line_idx].append({'qual': quality, 'key': key, 'url': None})
@@ -296,7 +282,6 @@ async def process_forward(bot, event, user):
             src_cap = source_msg.raw_text or source_msg.text or ""
             new_cap = remove_chapter_id_from_caption(src_cap)
 
-            # ✅ BOLD ALL CAPTIONS (using MessageEntityBold)
             bold_entities = []
             if new_cap:
                 bold_entities = [MessageEntityBold(0, len(new_cap))]
@@ -310,14 +295,14 @@ async def process_forward(bot, event, user):
                             target_full_id,
                             source_msg.media,
                             caption=new_cap,
-                            entities=bold_entities,  # ✅ BOLD CAPTION HERE
+                            entities=bold_entities,
                             force_document=True
                         )
                     else:
                         fwd_msg = await bot.send_message(
                             target_full_id,
                             new_cap,
-                            entities=bold_entities  # ✅ BOLD TEXT HERE
+                            entities=bold_entities
                         )
                     break
                 except FloodWaitError as fw:
@@ -362,7 +347,6 @@ async def process_forward(bot, event, user):
             pass
         await asyncio.sleep(1)
 
-        # Build updated txt
         final_txt_content = list(txt_lines)
         for idx, mappings in line_mappings.items():
             if idx < len(final_txt_content):
@@ -400,7 +384,6 @@ async def process_forward(bot, event, user):
         cleanup_file(path_map)
         cleanup_file(user['fwd_file_path'])
 
-        # ✅ Send Missed Lines Report to Bot Chat
         missed_msg = ""
         if missed_lines:
             sorted_missed = sorted(list(missed_lines))
@@ -426,7 +409,7 @@ async def process_forward(bot, event, user):
         traceback.print_exc()
 
 
-# ====================== FILTER PROCESS ======================
+# ====================== FILTER PROCESS (KEY BASED) ======================
 async def process_filter(bot, event, user):
     channel_id = user['channel_id']
     first_msg_id = user['first_msg_id']
@@ -441,18 +424,32 @@ async def process_filter(bot, event, user):
     full_channel_id = int(f"-100{channel_id}")
     total_messages = last_msg_id - first_msg_id + 1
 
-    failed_numbers = []
-    failed_names = []
-    uploading_msgs = []
+    # Step 1: Extract all keys from txt file
+    txt_key_entries = extract_keys_from_txt_format(txt_lines)
+
+    if not txt_key_entries:
+        await event.respond(
+            "❌ **No keys found in .txt file!**\n\n"
+            "Format hona chahiye:\n"
+            "`🌚{number}🌚{name}💀{key}💀 : url`"
+        )
+        user['step'] = None
+        cleanup_file(downloaded_file_path)
+        user['file_path'] = None
+        return
+
+    # Build key -> entry mapping
+    all_txt_keys = {}
+    for entry in txt_key_entries:
+        all_txt_keys[entry['key']] = entry
+
+    found_keys_in_channel = set()
     processed = 0
-    failed_count = 0
-    deleted_count = 0
 
     status_msg = await event.respond(
-        f"🔄 **Processing...**\n"
-        f"📊 Total: ~{total_messages} messages\n"
-        f"📄 TXT Lines: {len(txt_lines)}\n"
-        f"📁 File: `{original_filename}`\n"
+        f"🔄 **Scanning Channel...**\n"
+        f"📊 Messages: ~{total_messages}\n"
+        f"🔑 Keys in TXT: {len(all_txt_keys)}\n"
         f"⏳ Please wait..."
     )
 
@@ -482,28 +479,19 @@ async def process_filter(bot, event, user):
                         elif hasattr(msg, 'message') and msg.message:
                             text = msg.message
 
-                        if not text:
-                            processed += 1
-                            continue
+                        # Check if any txt key exists in this message
+                        if text:
+                            for txt_key in all_txt_keys:
+                                if txt_key in text:
+                                    found_keys_in_channel.add(txt_key)
 
-                        if is_failed_message(text):
-                            num = extract_failed_number(text)
-                            name = extract_failed_video_name(text)
-
-                            if num is not None:
-                                failed_numbers.append(num)
-                            if name:
-                                failed_names.append(name)
-
-                            failed_count += 1
-
-                        elif is_uploading_message(text):
-                            uname = extract_uploading_video_name(text)
-                            if uname:
-                                uploading_msgs.append({
-                                    'msg_id': msg.id,
-                                    'name': uname
-                                })
+                        # Also check document file name
+                        if msg and hasattr(msg, 'document') and msg.document:
+                            fname = get_file_name(msg.document)
+                            if fname:
+                                for txt_key in all_txt_keys:
+                                    if txt_key in fname:
+                                        found_keys_in_channel.add(txt_key)
 
                         processed += 1
 
@@ -529,112 +517,68 @@ async def process_filter(bot, event, user):
             if now - last_edit_time > 4:
                 try:
                     pct = int((processed / total_messages) * 100)
+                    found_so_far = len(found_keys_in_channel)
+                    missing_so_far = len(all_txt_keys) - found_so_far
                     await status_msg.edit(
-                        f"🔄 **Processing... {pct}%**\n"
+                        f"🔄 **Scanning... {pct}%**\n"
                         f"📊 {processed}/{total_messages}\n"
-                        f"❌ Failed: {failed_count}\n"
+                        f"✅ Found: {found_so_far}/{len(all_txt_keys)}\n"
+                        f"❌ Missing: {missing_so_far}\n"
                         f"⏳ Wait..."
                     )
                     last_edit_time = now
                 except:
                     pass
 
-        # DELETE Uploading Video messages
-        try:
-            await status_msg.edit(
-                f"🗑️ **Deleting Uploading Video msgs...**\n"
-                f"Checking {len(uploading_msgs)} msgs..."
-            )
-        except:
-            pass
+        # Step 2: Find missing keys
+        missing_entries = []
+        for key, entry in all_txt_keys.items():
+            if key not in found_keys_in_channel:
+                missing_entries.append(entry)
 
-        msgs_to_delete = []
-        for upload in uploading_msgs:
-            upload_clean = re.sub(r'\s+', ' ', upload['name']).strip().lower()
+        found_count = len(found_keys_in_channel & set(all_txt_keys.keys()))
+        missing_count = len(missing_entries)
 
-            for fname in failed_names:
-                fname_clean = re.sub(r'\s+', ' ', fname).strip().lower()
-
-                if fname_clean in upload_clean or upload_clean in fname_clean:
-                    msgs_to_delete.append(upload['msg_id'])
-                    break
-
-        if msgs_to_delete:
-            for i in range(0, len(msgs_to_delete), 100):
-                batch = msgs_to_delete[i:i + 100]
-                retry = 0
-                while retry < 3:
-                    try:
-                        await bot.delete_messages(full_channel_id, batch)
-                        deleted_count += len(batch)
-                        break
-                    except FloodWaitError as e:
-                        await asyncio.sleep(e.seconds + 1)
-                        retry += 1
-                    except Exception as e:
-                        print(f"Delete error: {e}")
-                        break
-
-        # MATCH LINE NUMBERS FROM .txt
-        failed_lines = []
-        invalid_numbers = []
-
-        for num in failed_numbers:
-            index = num - 1
-            if 0 <= index < len(txt_lines):
-                failed_lines.append(txt_lines[index])
-            else:
-                invalid_numbers.append(num)
-
-        seen = set()
-        unique_failed_lines = []
-        for line in failed_lines:
-            if line not in seen:
-                unique_failed_lines.append(line)
-                seen.add(line)
-        failed_lines = unique_failed_lines
-
-        # CREATE OUTPUT FILE
+        # Step 3: Build output file - ONLY missing lines, nothing extra
         output_display_name = get_output_filename(original_filename)
         output_temp_path = f"./downloads/{event.sender_id}_{output_display_name}"
 
         with open(output_temp_path, 'w', encoding='utf-8') as f:
-            if failed_lines:
-                for line in failed_lines:
-                    f.write(line + '\n')
+            if missing_entries:
+                for entry in missing_entries:
+                    f.write(entry['original_line'] + '\n')
             else:
-                f.write("No failed lines found.\n")
+                f.write("")
 
-        nums_str = ', '.join(str(n) for n in failed_numbers[:80])
-        if len(failed_numbers) > 80:
-            nums_str += '...'
+        # Step 4: Send missing line numbers in chat (only idx)
+        if missing_entries:
+            missing_indices = [entry['line_number'] for entry in missing_entries]
+            idx_str = ', '.join(missing_indices)
+
+            # Split if too long
+            if len(idx_str) > 3500:
+                idx_str = idx_str[:3500] + '...'
+
+            await event.respond(f"❌ **Missing ({missing_count}):**\n`{idx_str}`")
 
         try:
             await status_msg.edit(
-                f"✅ **Processing Complete!**\n\n"
-                f"📊 **Stats:**\n"
-                f"├ Scanned: **{processed}**\n"
-                f"├ Failed Msgs: **{failed_count}**\n"
-                f"├ Line Numbers: **{len(failed_numbers)}**\n"
-                f"├ TXT Lines Matched: **{len(failed_lines)}**\n"
-                f"├ Uploading Deleted: **{deleted_count}**\n"
-                f"└ 📄 Uploading `{output_display_name}`..."
+                f"✅ **Scan Complete!**\n\n"
+                f"📊 Scanned: **{processed}** msgs\n"
+                f"🔑 Total Keys: **{len(all_txt_keys)}**\n"
+                f"✅ Found: **{found_count}**\n"
+                f"❌ Missing: **{missing_count}**\n"
+                f"📄 Uploading `{output_display_name}`..."
             )
         except:
             pass
 
         caption = (
             f"📄 **{output_display_name}**\n\n"
-            f"❌ Failed: **{failed_count}**\n"
-            f"📝 Lines extracted: **{len(failed_lines)}**\n"
-            f"🗑️ Deleted: **{deleted_count}**\n"
+            f"🔑 Total Keys: **{len(all_txt_keys)}**\n"
+            f"✅ Found: **{found_count}**\n"
+            f"❌ Missing: **{missing_count}**"
         )
-
-        if invalid_numbers:
-            caption += f"\n⚠️ Out of range: {invalid_numbers[:20]}"
-
-        if nums_str:
-            caption += f"\n\n🔢 Numbers: `{nums_str}`"
 
         await bot.send_file(
             event.chat_id,
@@ -676,7 +620,7 @@ async def main():
         await event.respond(
             "🤖 **Bot Active**\n\n"
             "📌 **Commands:**\n"
-            "/filter - Scan & filter failed videos\n"
+            "/filter - Find missing keys from channel\n"
             "/forward - Forward messages to target channel\n"
             "/cancel - Cancel current operation"
         )
@@ -700,7 +644,10 @@ async def main():
         u['channel_id'] = None
         u['first_msg_id'] = None
         u['last_msg_id'] = None
-        await event.respond("📄 **Send your .txt file**")
+        await event.respond(
+            "📄 **Send your .txt file**\n\n"
+            "Format: `🌚{num}🌚{name}💀{key}💀 : url`"
+        )
 
     @bot.on(events.NewMessage(pattern='/forward'))
     async def forward_cmd(event):
@@ -742,11 +689,14 @@ async def main():
                     u['file_path'] = pth
                     u['step'] = 'wait_flink'
 
+                    key_entries = extract_keys_from_txt_format(lines)
                     output_name = get_output_filename(fname)
+
                     await event.respond(
                         f"✅ **File received!**\n"
                         f"📁 Name: `{fname}`\n"
                         f"📝 Lines: **{len(lines)}**\n"
+                        f"🔑 Keys: **{len(key_entries)}**\n"
                         f"📤 Output: `{output_name}`\n\n"
                         f"🔗 **Send First Msg Link**\n"
                         f"`https://t.me/c/channel_id/msg_id`"
@@ -778,7 +728,7 @@ async def main():
                 u['step'] = 'processing'
                 await event.respond(
                     f"✅ **Last: `{mid}`**\n"
-                    f"⚙️ **Processing started...**"
+                    f"⚙️ **Scanning for missing keys...**"
                 )
                 await process_filter(bot, event, u)
             else:
