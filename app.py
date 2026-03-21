@@ -123,11 +123,12 @@ def extract_keys_from_txt(txt_lines):
 
 def extract_keys_from_txt_format(txt_lines):
     """
-    Extract keys from format: 🌚{number}🌚{name}💀{key}💀 : url
-    Returns list of dicts with line info
+    Extract keys from format:
+    🌚720🌚New Feature Update💀h2Ub88AGkb...💀 : url
+    🌚OP🌚Lecture Planner💀MvOj7CPU...💀 : url
     """
     results = []
-    pattern = re.compile(r'🌚\{([^}]*)\}🌚\{([^}]*)\}💀\{([^}]*)\}💀')
+    pattern = re.compile(r'🌚([^🌚]+)🌚([^💀]+)💀([^💀]+)💀')
 
     for idx, line in enumerate(txt_lines):
         stripped = line.strip()
@@ -208,7 +209,6 @@ async def process_forward(bot, event, user):
             while retry < 3:
                 try:
                     messages = await bot.get_messages(source_full_id, ids=chunk)
-
                     for msg in messages:
                         if msg is None:
                             continue
@@ -260,7 +260,6 @@ async def process_forward(bot, event, user):
         forwarded_count = 0
         not_found_count = 0
         mapping_log = []
-
         last_edit_time = time.time()
         base_name = original_filename.rsplit('.', 1)[0] if '.' in original_filename else original_filename
 
@@ -268,7 +267,6 @@ async def process_forward(bot, event, user):
             line_idx = entry['line_idx']
             quality = entry['quality']
             key = entry['key']
-
             source_msg = key_to_message.get(key)
 
             if not source_msg:
@@ -281,7 +279,6 @@ async def process_forward(bot, event, user):
 
             src_cap = source_msg.raw_text or source_msg.text or ""
             new_cap = remove_chapter_id_from_caption(src_cap)
-
             bold_entities = []
             if new_cap:
                 bold_entities = [MessageEntityBold(0, len(new_cap))]
@@ -292,17 +289,12 @@ async def process_forward(bot, event, user):
                 try:
                     if source_msg.media:
                         fwd_msg = await bot.send_file(
-                            target_full_id,
-                            source_msg.media,
-                            caption=new_cap,
-                            entities=bold_entities,
-                            force_document=True
+                            target_full_id, source_msg.media,
+                            caption=new_cap, entities=bold_entities, force_document=True
                         )
                     else:
                         fwd_msg = await bot.send_message(
-                            target_full_id,
-                            new_cap,
-                            entities=bold_entities
+                            target_full_id, new_cap, entities=bold_entities
                         )
                     break
                 except FloodWaitError as fw:
@@ -317,9 +309,7 @@ async def process_forward(bot, event, user):
                 forwarded_count += 1
                 target_link = f"https://t.me/c/{target_disp_id}/{fwd_msg.id}"
                 source_link = f"https://t.me/c/{source_disp_id}/{source_msg.id}"
-
                 mapping_log.append(f"{source_link} >> {target_link}")
-
                 if line_idx not in line_mappings:
                     line_mappings[line_idx] = []
                 line_mappings[line_idx].append({'qual': quality, 'key': key, 'url': target_link})
@@ -369,15 +359,13 @@ async def process_forward(bot, event, user):
         await bot.send_file(
             target_full_id, path_txt,
             caption=f"📄 **Updated List** (`{base_name}_updated.txt`)\n✅ Forwarded: **{forwarded_count}**\n❌ Missing: **{not_found_count}**",
-            file_name=f"{base_name}_updated.txt",
-            force_document=True
+            file_name=f"{base_name}_updated.txt", force_document=True
         )
         await asyncio.sleep(2)
         await bot.send_file(
             target_full_id, path_map,
             caption=f"🗺️ **Mapping Report**",
-            file_name=f"{base_name}_mapping.txt",
-            force_document=True
+            file_name=f"{base_name}_mapping.txt", force_document=True
         )
 
         cleanup_file(path_txt)
@@ -431,7 +419,7 @@ async def process_filter(bot, event, user):
         await event.respond(
             "❌ **No keys found in .txt file!**\n\n"
             "Format hona chahiye:\n"
-            "`🌚{number}🌚{name}💀{key}💀 : url`"
+            "`🌚720🌚Video Name💀keyhere💀 : url`"
         )
         user['step'] = None
         cleanup_file(downloaded_file_path)
@@ -539,7 +527,7 @@ async def process_filter(bot, event, user):
         found_count = len(found_keys_in_channel & set(all_txt_keys.keys()))
         missing_count = len(missing_entries)
 
-        # Step 3: Build output file - ONLY missing lines, nothing extra
+        # Step 3: Build output file - ONLY missing lines
         output_display_name = get_output_filename(original_filename)
         output_temp_path = f"./downloads/{event.sender_id}_{output_display_name}"
 
@@ -547,19 +535,33 @@ async def process_filter(bot, event, user):
             if missing_entries:
                 for entry in missing_entries:
                     f.write(entry['original_line'] + '\n')
-            else:
-                f.write("")
 
-        # Step 4: Send missing line numbers in chat (only idx)
+        # Step 4: Send missing line_number (idx) in chat
         if missing_entries:
             missing_indices = [entry['line_number'] for entry in missing_entries]
             idx_str = ', '.join(missing_indices)
 
-            # Split if too long
+            # Split into multiple messages if too long
             if len(idx_str) > 3500:
-                idx_str = idx_str[:3500] + '...'
+                chunks_text = []
+                current = ""
+                for idx_val in missing_indices:
+                    if current:
+                        temp = current + ", " + idx_val
+                    else:
+                        temp = idx_val
+                    if len(temp) > 3500:
+                        chunks_text.append(current)
+                        current = idx_val
+                    else:
+                        current = temp
+                if current:
+                    chunks_text.append(current)
 
-            await event.respond(f"❌ **Missing ({missing_count}):**\n`{idx_str}`")
+                for ci, chunk_txt in enumerate(chunks_text):
+                    await event.respond(f"❌ **Missing ({ci+1}/{len(chunks_text)}):**\n`{chunk_txt}`")
+            else:
+                await event.respond(f"❌ **Missing ({missing_count}):**\n`{idx_str}`")
 
         try:
             await status_msg.edit(
@@ -567,8 +569,7 @@ async def process_filter(bot, event, user):
                 f"📊 Scanned: **{processed}** msgs\n"
                 f"🔑 Total Keys: **{len(all_txt_keys)}**\n"
                 f"✅ Found: **{found_count}**\n"
-                f"❌ Missing: **{missing_count}**\n"
-                f"📄 Uploading `{output_display_name}`..."
+                f"❌ Missing: **{missing_count}**"
             )
         except:
             pass
@@ -580,13 +581,18 @@ async def process_filter(bot, event, user):
             f"❌ Missing: **{missing_count}**"
         )
 
-        await bot.send_file(
-            event.chat_id,
-            output_temp_path,
-            caption=caption,
-            file_name=output_display_name,
-            force_document=True
-        )
+        if missing_entries:
+            await bot.send_file(
+                event.chat_id, output_temp_path,
+                caption=caption, file_name=output_display_name, force_document=True
+            )
+        else:
+            await event.respond(
+                f"🎉 **All keys found!**\n\n"
+                f"🔑 Total: **{len(all_txt_keys)}**\n"
+                f"✅ Found: **{found_count}**\n"
+                f"❌ Missing: **0**"
+            )
 
         cleanup_file(output_temp_path)
         cleanup_file(downloaded_file_path)
@@ -646,7 +652,7 @@ async def main():
         u['last_msg_id'] = None
         await event.respond(
             "📄 **Send your .txt file**\n\n"
-            "Format: `🌚{num}🌚{name}💀{key}💀 : url`"
+            "Format: `🌚720🌚name💀key💀 : url`"
         )
 
     @bot.on(events.NewMessage(pattern='/forward'))
